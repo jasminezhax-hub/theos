@@ -5,8 +5,11 @@
 #define BACKEND_URL @"https://op724ox0393.vicp.fun/api.php"
 #define TOKEN_PATH @"/var/mobile/Library/Preferences/com.plugin.cardkey.token"
 #define TOKEN_PERMS 0600
+// 新增：持久化验证状态的键
+#define IS_VERIFIED_KEY @"com.plugin.cardkey.isVerified"
+#define HAS_SHOWN_ALERT_KEY @"com.plugin.cardkey.hasShownAlert"
 
-// 静态变量（内存状态）
+// 静态变量（仅用于运行时状态）
 static BOOL isVerified = NO;
 static BOOL hasShownAlert = NO;
 static NSString *authToken = nil;
@@ -208,19 +211,33 @@ static NSString *linkUrl = nil;
     }
 }
 
-// 修复点1：检查本地Token，直接标记验证状态
+// 新增：获取持久化状态的工具方法
++ (NSUserDefaults *)pluginDefaults {
+    return [[NSUserDefaults alloc] initWithSuiteName:@"com.plugin.cardkey"];
+}
+
+// 修复点1：优先从持久化存储读取验证状态
 - (void)checkExistingToken {
     NSFileManager *fm = [NSFileManager defaultManager];
     if ([fm fileExistsAtPath:TOKEN_PATH]) {
         NSString *savedToken = [NSString stringWithContentsOfFile:TOKEN_PATH encoding:NSUTF8StringEncoding error:nil];
         if (savedToken && savedToken.length > 0) {
             authToken = savedToken;
-            // 直接标记已验证，不弹窗
-            isVerified = YES;
-            hasShownAlert = YES;
-            [self dismissAlert];
-            // 后台校验Token有效性（不影响UI）
-            [self verifyToken:savedToken];
+            // 从持久化存储读取验证状态
+            NSUserDefaults *defaults = [[self class] pluginDefaults];
+            BOOL savedIsVerified = [defaults boolForKey:IS_VERIFIED_KEY];
+            BOOL savedHasShownAlert = [defaults boolForKey:HAS_SHOWN_ALERT_KEY];
+            
+            if (savedIsVerified) {
+                isVerified = YES;
+                hasShownAlert = savedHasShownAlert;
+                [self dismissAlert];
+                // 后台校验Token有效性
+                [self verifyToken:savedToken];
+            } else {
+                // 本地有Token但状态未验证，重新验证
+                [self verifyToken:savedToken];
+            }
         }
     }
 }
@@ -266,11 +283,18 @@ static NSString *linkUrl = nil;
                 NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
                 if (!jsonError) {
                     if ([json[@"success"] boolValue]) {
-                        // 修复点2：验证通过立即标记状态，永久免弹窗
+                        // 修复点2：验证通过后持久化保存状态
                         isVerified = YES;
                         hasShownAlert = YES;
                         authToken = json[@"token"];
                         [self saveToken:authToken];
+                        
+                        // 保存到NSUserDefaults（持久化）
+                        NSUserDefaults *defaults = [[self class] pluginDefaults];
+                        [defaults setBool:YES forKey:IS_VERIFIED_KEY];
+                        [defaults setBool:YES forKey:HAS_SHOWN_ALERT_KEY];
+                        [defaults synchronize];
+                        
                         [self dismissAlert];
                     } else {
                         [self showAlert:json[@"message"] ?: @"卡密验证失败"];
@@ -287,7 +311,7 @@ static NSString *linkUrl = nil;
     [task resume];
 }
 
-// 修复点3：Token无效时清除文件，重置状态
+// 修复点3：Token无效时清除持久化状态
 - (void)verifyToken:(NSString *)token {
     NSString *urlString = [NSString stringWithFormat:@"%@?action=checkStatus&token=%@", 
                           BACKEND_URL, 
@@ -302,12 +326,26 @@ static NSString *linkUrl = nil;
             if (!jsonError && [json[@"success"] boolValue]) {
                 // 保持验证状态
                 isVerified = YES;
+                hasShownAlert = YES;
+                // 更新持久化状态
+                NSUserDefaults *defaults = [[self class] pluginDefaults];
+                [defaults setBool:YES forKey:IS_VERIFIED_KEY];
+                [defaults setBool:YES forKey:HAS_SHOWN_ALERT_KEY];
+                [defaults synchronize];
             } else {
-                // Token失效，清除本地文件，下次打开重新验证
+                // Token失效，清除本地文件和持久化状态
                 [[NSFileManager defaultManager] removeItemAtPath:TOKEN_PATH error:nil];
                 isVerified = NO;
                 hasShownAlert = NO;
+                // 清除持久化状态
+                NSUserDefaults *defaults = [[self class] pluginDefaults];
+                [defaults setBool:NO forKey:IS_VERIFIED_KEY];
+                [defaults setBool:NO forKey:HAS_SHOWN_ALERT_KEY];
+                [defaults synchronize];
             }
+        } else {
+            // 网络错误，不改变状态
+            NSLog(@"[CardKeyPlugin] Token验证网络错误: %@", error.localizedDescription);
         }
     }];
     [task resume];
@@ -336,10 +374,11 @@ static NSString *linkUrl = nil;
 
 @end
 
-// 修复点4：全局弹窗函数（优先判断验证状态）
+// 修复点4：全局弹窗函数（严格判断持久化状态）
 static void showCardKeyAlert() {
     // 已验证 / 已弹窗，直接返回
     if (hasShownAlert || isVerified) {
+        NSLog(@"[CardKeyPlugin] 不弹窗：hasShownAlert=%d, isVerified=%d", hasShownAlert, isVerified);
         return;
     }
     hasShownAlert = YES;
@@ -394,23 +433,44 @@ static void showCardKeyAlert() {
 }
 %end
 
-// 修复点5：插件启动时预检查本地Token
+// 修复点5：插件启动时从持久化存储加载状态（最关键）
 %ctor {
-    // 启动时优先检查本地Token，直接标记验证状态
+    NSLog(@"[CardKeyPlugin] 插件启动，加载持久化状态");
+    
+    // 1. 从NSUserDefaults加载持久化状态（优先于一切）
+    NSUserDefaults *defaults = [[CardKeyViewController pluginDefaults] init];
+    isVerified = [defaults boolForKey:IS_VERIFIED_KEY];
+    hasShownAlert = [defaults boolForKey:HAS_SHOWN_ALERT_KEY];
+    
+    NSLog(@"[CardKeyPlugin] 加载状态：isVerified=%d, hasShownAlert=%d", isVerified, hasShownAlert);
+    
+    // 2. 检查本地Token（作为备份验证）
     NSFileManager *fm = [NSFileManager defaultManager];
     if ([fm fileExistsAtPath:TOKEN_PATH]) {
         NSString *token = [NSString stringWithContentsOfFile:TOKEN_PATH encoding:NSUTF8StringEncoding error:nil];
         if (token && token.length > 0) {
-            isVerified = YES;
-            hasShownAlert = YES;
-            return;
+            authToken = token;
+            // 如果持久化状态未验证，强制验证
+            if (!isVerified) {
+                [self verifyToken:token];
+            }
+        }
+    } else {
+        // 无Token，重置持久化状态
+        if (isVerified || hasShownAlert) {
+            [defaults setBool:NO forKey:IS_VERIFIED_KEY];
+            [defaults setBool:NO forKey:HAS_SHOWN_ALERT_KEY];
+            [defaults synchronize];
+            isVerified = NO;
+            hasShownAlert = NO;
         }
     }
     
-    // 无Token，延迟弹窗
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!hasShownAlert && !isVerified) {
+    // 3. 只有未验证且未弹窗时，才延迟弹窗
+    if (!hasShownAlert && !isVerified) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSLog(@"[CardKeyPlugin] 延迟弹窗");
             showCardKeyAlert();
-        }
-    });
+        });
+    }
 }
