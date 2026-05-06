@@ -1,0 +1,11 @@
+Package: com.plugin.cardkey
+Name: CardKeyPlugin
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Card Key Verification Plugin with Ad Support
+Maintainer: Admin
+Author: Admin
+Section: System
+Depends: mobilesubstrate
+Homepage: 
+Sponsor: 
