@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,11 +17,19 @@ jobs:
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           echo "$HOME/theos/bin" >> $GITHUB_PATH
+          # 安装SDK（避免版本缺失问题）
+          cd $HOME/theos
+          ./bin/install.sh
 
       - name: Install dependencies
         run: |
-          brew install ldid
-          brew install make
+          brew install ldid make
+
+      - name: Verify environment
+        run: |
+          echo "THEOS path: $THEOS"
+          which make
+          make --version
 
       - name: Build Tweak
         run: |
