@@ -3,7 +3,7 @@
 #import <sys/utsname.h>
 
 #define BACKEND_URL @"https://op724ox0393.vicp.fun/api.php"
-// 🔥 核心修复：改用App自身沙盒路径（唯一有权限的路径）
+// 改用App沙盒路径（重签名注入唯一有权限的路径）
 #define TOKEN_PATH [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"cardkey_token.txt"]
 
 static BOOL isVerified = NO;
@@ -32,7 +32,10 @@ static NSString *authToken = nil;
     uname(&systemInfo);
     NSString *deviceModel = [NSString stringWithCString:systemInfo.machine encoding:NSUTF8StringEncoding];
     NSString *systemVersion = [[UIDevice currentDevice] systemVersion];
-    return [[NSString stringWithFormat:@"%@_%@", deviceModel, systemVersion] dataUsingEncoding:NSUTF8StringEncoding].base64EncodedString;
+    NSString *rawStr = [NSString stringWithFormat:@"%@_%@", deviceModel, systemVersion];
+    NSData *rawData = [rawStr dataUsingEncoding:NSUTF8StringEncoding];
+    // 修复1：改用兼容旧SDK的base64方法
+    return [rawData base64EncodedStringWithOptions:0];
 }
 
 - (void)setupUI {
@@ -61,8 +64,9 @@ static NSString *authToken = nil;
     [self.submitBtn addTarget:self action:@selector(submitCardKey) forControlEvents:UIControlEventTouchUpInside];
     self.submitBtn.layer.cornerRadius = 8;
     
-    self.spinner = [[UIActivityIndicatorView alloc] initWithFrame:CGRectMake(w/2-20, 200, 40, 40)];
-    self.spinner.style = UIActivityIndicatorViewStyleMedium;
+    // 修复2：初始化时指定spinner样式（兼容旧SDK）
+    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    self.spinner.frame = CGRectMake(w/2-20, 200, 40, 40);
     
     [self.alertView addSubview:self.titleLabel];
     [self.alertView addSubview:self.cardKeyField];
@@ -71,11 +75,10 @@ static NSString *authToken = nil;
     [self.overlayView addSubview:self.alertView];
     [self.view addSubview:self.overlayView];
     
-    // 启动检查沙盒Token（核心修复）
+    // 启动检查沙盒Token
     [self checkLocalToken];
 }
 
-// 🔥 检查App沙盒内的Token（有权限！）
 - (void)checkLocalToken {
     NSFileManager *fm = NSFileManager.defaultManager;
     if ([fm fileExistsAtPath:TOKEN_PATH]) {
@@ -98,7 +101,10 @@ static NSString *authToken = nil;
     self.submitBtn.enabled = NO;
     
     NSString *deviceId = self.getDeviceId;
-    NSString *url = [NSString stringWithFormat:@"%@?action=verify&cardKey=%@&deviceId=%@", BACKEND_URL, self.cardKeyField.text, deviceId];
+    NSString *url = [NSString stringWithFormat:@"%@?action=verify&cardKey=%@&deviceId=%@", 
+                     BACKEND_URL, 
+                     [self.cardKeyField.text stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]], 
+                     [deviceId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
     
     NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:url] completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -112,7 +118,7 @@ static NSString *authToken = nil;
             
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
             if ([json[@"success"] boolValue]) {
-                // 🔥 核心：Token写入App沙盒（永久保存）
+                // Token写入App沙盒（永久保存）
                 [json[@"token"] writeToFile:TOKEN_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];
                 isVerified = YES;
                 hasShownAlert = YES;
@@ -133,7 +139,6 @@ static NSString *authToken = nil;
 
 @end
 
-// 全局弹窗控制
 static void showAlert() {
     if (hasShownAlert || isVerified) return;
     hasShownAlert = YES;
@@ -148,11 +153,9 @@ static void showAlert() {
     });
 }
 
-// 钩子：只在首页弹窗一次
 %hook UIViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    // 过滤自身，避免循环弹窗
     NSString *cls = NSStringFromClass(self.class);
     if (![cls hasPrefix:@"CardKey"] && !hasShownAlert && !isVerified) {
         showAlert();
@@ -160,9 +163,7 @@ static void showAlert() {
 }
 %end
 
-// 插件入口
 %ctor {
-    // 启动直接检查沙盒Token，无权限问题
     NSFileManager *fm = NSFileManager.defaultManager;
     if ([fm fileExistsAtPath:TOKEN_PATH]) {
         NSString *t = [NSString stringWithContentsOfFile:TOKEN_PATH encoding:NSUTF8StringEncoding error:nil];
@@ -172,7 +173,6 @@ static void showAlert() {
             return;
         }
     }
-    // 无Token，延迟弹窗
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         showAlert();
     });
