@@ -8,33 +8,45 @@ on:
 jobs:
   build:
     runs-on: macos-14
+    env:
+      THEOS: $HOME/theos
+      THEOS_DEVICE_IP: 127.0.0.1
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # 解决Node.js警告
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: List project files (调试用)
+        run: ls -la
+
       - name: Install Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          echo "$HOME/theos/bin" >> $GITHUB_PATH
-          # 安装SDK（避免版本缺失问题）
           cd $HOME/theos
           ./bin/install.sh
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          echo "$HOME/theos/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: |
           brew install ldid make
+          brew list --versions ldid make
 
-      - name: Verify environment
+      - name: Verify environment (调试用)
         run: |
           echo "THEOS path: $THEOS"
           which make
           make --version
+          ls -la $THEOS
 
       - name: Build Tweak
         run: |
           make clean
           make package FINALPACKAGE=1
+        continue-on-error: false # 失败时强制停止，方便看日志
+
+      - name: List output files (调试用)
+        run: ls -la packages/
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
