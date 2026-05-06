@@ -6,11 +6,13 @@
 #define TOKEN_PATH @"/var/mobile/Library/Preferences/com.plugin.cardkey.token"
 #define TOKEN_PERMS 0600
 
+// 静态变量（内存状态）
 static BOOL isVerified = NO;
+static BOOL hasShownAlert = NO;
+static NSString *authToken = nil;
+// 广告相关变量
 static NSString *adContent = nil;
 static NSString *adImageUrl = nil;
-static NSString *authToken = nil;
-static BOOL hasShownAlert = NO;
 static NSString *linkText = nil;
 static NSString *linkUrl = nil;
 
@@ -152,26 +154,20 @@ static NSString *linkUrl = nil;
                         linkText = json[@"linkText"];
                         linkUrl = json[@"linkUrl"];
                         
-                        NSLog(@"[CardKeyPlugin] linkText: %@, linkUrl: %@", linkText, linkUrl);
-                        
                         self.adLabel.text = adContent ?: @"广告";
                         
-                        if (linkText && [linkText isKindOfClass:[NSString class]] && linkText.length > 0 &&
-                            linkUrl && [linkUrl isKindOfClass:[NSString class]] && linkUrl.length > 0) {
+                        if (linkText && [linkText isKindOfClass:[NSString class]] && linkText.length > 0 && linkUrl && [linkUrl isKindOfClass:[NSString class]] && linkUrl.length > 0) {
                             [self.linkBtn setTitle:linkText forState:UIControlStateNormal];
                             self.linkBtn.hidden = NO;
-                            NSLog(@"[CardKeyPlugin] 按钮文字已更新: %@", linkText);
                         } else {
                             [self.linkBtn setTitle:@"点击获取更多信息" forState:UIControlStateNormal];
                             self.linkBtn.hidden = NO;
-                            NSLog(@"[CardKeyPlugin] linkText或linkUrl为空，使用默认文字");
                         }
                         
                         if (adImageUrl && [adImageUrl isKindOfClass:[NSString class]] && adImageUrl.length > 0) {
                             [self loadAdImage];
                         }
                     } else {
-                        NSLog(@"[CardKeyPlugin] 广告请求返回失败");
                         [self.linkBtn setTitle:@"点击获取更多信息" forState:UIControlStateNormal];
                         self.linkBtn.hidden = NO;
                     }
@@ -212,11 +208,18 @@ static NSString *linkUrl = nil;
     }
 }
 
+// 修复点1：检查本地Token，直接标记验证状态
 - (void)checkExistingToken {
-    if ([[NSFileManager defaultManager] fileExistsAtPath:TOKEN_PATH]) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:TOKEN_PATH]) {
         NSString *savedToken = [NSString stringWithContentsOfFile:TOKEN_PATH encoding:NSUTF8StringEncoding error:nil];
         if (savedToken && savedToken.length > 0) {
             authToken = savedToken;
+            // 直接标记已验证，不弹窗
+            isVerified = YES;
+            hasShownAlert = YES;
+            [self dismissAlert];
+            // 后台校验Token有效性（不影响UI）
             [self verifyToken:savedToken];
         }
     }
@@ -263,7 +266,9 @@ static NSString *linkUrl = nil;
                 NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
                 if (!jsonError) {
                     if ([json[@"success"] boolValue]) {
+                        // 修复点2：验证通过立即标记状态，永久免弹窗
                         isVerified = YES;
+                        hasShownAlert = YES;
                         authToken = json[@"token"];
                         [self saveToken:authToken];
                         [self dismissAlert];
@@ -282,6 +287,7 @@ static NSString *linkUrl = nil;
     [task resume];
 }
 
+// 修复点3：Token无效时清除文件，重置状态
 - (void)verifyToken:(NSString *)token {
     NSString *urlString = [NSString stringWithFormat:@"%@?action=checkStatus&token=%@", 
                           BACKEND_URL, 
@@ -294,12 +300,13 @@ static NSString *linkUrl = nil;
             NSError *jsonError;
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
             if (!jsonError && [json[@"success"] boolValue]) {
+                // 保持验证状态
                 isVerified = YES;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self dismissAlert];
-                });
             } else {
+                // Token失效，清除本地文件，下次打开重新验证
                 [[NSFileManager defaultManager] removeItemAtPath:TOKEN_PATH error:nil];
+                isVerified = NO;
+                hasShownAlert = NO;
             }
         }
     }];
@@ -329,8 +336,12 @@ static NSString *linkUrl = nil;
 
 @end
 
+// 修复点4：全局弹窗函数（优先判断验证状态）
 static void showCardKeyAlert() {
-    if (hasShownAlert || isVerified) return;
+    // 已验证 / 已弹窗，直接返回
+    if (hasShownAlert || isVerified) {
+        return;
+    }
     hasShownAlert = YES;
     
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -371,10 +382,9 @@ static void showCardKeyAlert() {
 }
 
 %hook UIViewController
-
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    
+    // 未验证 + 未弹窗，才显示
     if (!hasShownAlert && !isVerified) {
         NSString *className = NSStringFromClass([self class]);
         if (className && ![className hasPrefix:@"CardKey"]) {
@@ -382,10 +392,22 @@ static void showCardKeyAlert() {
         }
     }
 }
-
 %end
 
+// 修复点5：插件启动时预检查本地Token
 %ctor {
+    // 启动时优先检查本地Token，直接标记验证状态
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if ([fm fileExistsAtPath:TOKEN_PATH]) {
+        NSString *token = [NSString stringWithContentsOfFile:TOKEN_PATH encoding:NSUTF8StringEncoding error:nil];
+        if (token && token.length > 0) {
+            isVerified = YES;
+            hasShownAlert = YES;
+            return;
+        }
+    }
+    
+    // 无Token，延迟弹窗
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (!hasShownAlert && !isVerified) {
             showCardKeyAlert();
