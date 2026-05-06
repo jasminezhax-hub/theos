@@ -1,0 +1,26 @@
+/* Main Screen */
+"Install TrollStore" = "安装 TrollStore";
+"Install" = "安装";
+"TrollInstallerX" = "TrollInstallerX";
+
+/* Progress */
+"Exploiting kernel..." = "正在利用内核...";
+"Downloading kernelcache..." = "正在下载 kernelcache...";
+"Patchfinding..." = "正在查找补丁...";
+"Installing persistence helper..." = "正在安装持久化助手...";
+"Success!" = "成功！";
+"Installation completed" = "安装完成";
+
+/* Buttons & Menus */
+"Settings" = "设置";
+"Choose Exploit" = "选择利用方式";
+"Direct" = "直接安装";
+"Indirect" = "间接安装";
+"Refresh Registrations" = "刷新注册";
+"Select App" = "选择应用";
+
+/* Errors */
+"Failed to exploit kernel" = "内核利用失败";
+"Network error" = "网络错误";
+"Try again" = "再试一次";
+"Reboot and retry" = "重启后重试";
