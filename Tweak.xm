@@ -6,6 +6,18 @@
 // 改用App沙盒路径（重签名注入唯一有权限的路径）
 #define TOKEN_PATH [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:@"cardkey_token.txt"]
 
+// 与 TrollInstallerX MainView.swift 中 VerificationGate 保持一致
+static NSString * const kTIXVerificationRequired = @"TIXVerificationRequired";
+static NSString * const kTIXVerificationPassed = @"TIXVerificationPassed";
+static NSString * const kTIXVerificationPassedNotification = @"tixVerificationPassed";
+
+static void TIXNotifyVerificationPassed(void) {
+    NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+    [defs setBool:YES forKey:kTIXVerificationPassed];
+    [defs synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:kTIXVerificationPassedNotification object:nil];
+}
+
 static BOOL isVerified = NO;
 static BOOL hasShownAlert = NO;
 static NSString *authToken = nil;
@@ -16,6 +28,7 @@ static NSString *authToken = nil;
 @property (nonatomic, strong) UITextField *cardKeyField;
 @property (nonatomic, strong) UIButton *submitBtn;
 @property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UILabel *hintLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @end
 
@@ -47,17 +60,24 @@ static NSString *authToken = nil;
     self.alertView.backgroundColor = UIColor.whiteColor;
     self.alertView.layer.cornerRadius = 12;
     
-    self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 30, w, 30)];
+    self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 22, w, 28)];
     self.titleLabel.text = @"卡密验证";
     self.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     self.titleLabel.textAlignment = NSTextAlignmentCenter;
+
+    self.hintLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, 50, w - 24, 22)];
+    self.hintLabel.text = @"验证通过将自动安装！";
+    self.hintLabel.font = [UIFont systemFontOfSize:12];
+    self.hintLabel.textColor = [UIColor redColor];
+    self.hintLabel.textAlignment = NSTextAlignmentCenter;
+    self.hintLabel.numberOfLines = 1;
     
-    self.cardKeyField = [[UITextField alloc] initWithFrame:CGRectMake(30, 80, w-60, 45)];
+    self.cardKeyField = [[UITextField alloc] initWithFrame:CGRectMake(30, 82, w-60, 45)];
     self.cardKeyField.borderStyle = UITextBorderStyleRoundedRect;
     self.cardKeyField.placeholder = @"请输入卡密";
     self.cardKeyField.textAlignment = NSTextAlignmentCenter;
     
-    self.submitBtn = [[UIButton alloc] initWithFrame:CGRectMake(30, 140, w-60, 45)];
+    self.submitBtn = [[UIButton alloc] initWithFrame:CGRectMake(30, 142, w-60, 45)];
     [self.submitBtn setTitle:@"验证" forState:UIControlStateNormal];
     [self.submitBtn setBackgroundColor:UIColor.systemBlueColor];
     [self.submitBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
@@ -66,9 +86,10 @@ static NSString *authToken = nil;
     
     // 修复2：初始化时指定spinner样式（兼容旧SDK）
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    self.spinner.frame = CGRectMake(w/2-20, 200, 40, 40);
+    self.spinner.frame = CGRectMake(w/2-20, 202, 40, 40);
     
     [self.alertView addSubview:self.titleLabel];
+    [self.alertView addSubview:self.hintLabel];
     [self.alertView addSubview:self.cardKeyField];
     [self.alertView addSubview:self.submitBtn];
     [self.alertView addSubview:self.spinner];
@@ -86,7 +107,9 @@ static NSString *authToken = nil;
         if (token.length > 0) {
             isVerified = YES;
             hasShownAlert = YES;
-            [self dismissViewControllerAnimated:NO completion:nil];
+            [self dismissViewControllerAnimated:NO completion:^{
+                TIXNotifyVerificationPassed();
+            }];
             return;
         }
     }
@@ -122,7 +145,9 @@ static NSString *authToken = nil;
                 [json[@"token"] writeToFile:TOKEN_PATH atomically:YES encoding:NSUTF8StringEncoding error:nil];
                 isVerified = YES;
                 hasShownAlert = YES;
-                [self dismissViewControllerAnimated:YES completion:nil];
+                [self dismissViewControllerAnimated:YES completion:^{
+                    TIXNotifyVerificationPassed();
+                }];
             } else {
                 [self showMsg:json[@"message"] ?: @"验证失败"];
             }
@@ -164,12 +189,16 @@ static void showAlert() {
 %end
 
 %ctor {
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kTIXVerificationRequired];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
     NSFileManager *fm = NSFileManager.defaultManager;
     if ([fm fileExistsAtPath:TOKEN_PATH]) {
         NSString *t = [NSString stringWithContentsOfFile:TOKEN_PATH encoding:NSUTF8StringEncoding error:nil];
         if (t.length > 0) {
             isVerified = YES;
             hasShownAlert = YES;
+            TIXNotifyVerificationPassed();
             return;
         }
     }
